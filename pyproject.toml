@@ -1,0 +1,168 @@
+[project]
+name = "grz-db"
+version = "0.0.1"
+description = "SQL models for grz-cli and grz-watchdog."
+authors = [{ name = "Till Hartmann", email = "till.hartmann@bih-charite.de" }]
+readme = "README.md"
+keywords = ['python']
+requires-python = ">=3.12,<4.0"
+classifiers = [
+    "Intended Audience :: Developers",
+    "Programming Language :: Python",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+]
+dependencies = [
+    "alembic>=1.16.1",
+    "sqlmodel>=0.0.24",
+]
+
+[project.urls]
+Homepage = "https://tedil.github.io/grz-db/"
+Repository = "https://github.com/tedil/grz-db"
+Documentation = "https://tedil.github.io/grz-db/"
+
+[dependency-groups]
+dev = [
+    "pytest>=7.2.0",
+    "pre-commit>=2.20.0",
+    "tox-uv>=1.11.3",
+    "deptry>=0.23.0",
+    "mypy>=0.991",
+    "ruff>=0.11.5",
+]
+test = [
+    "pytest",
+    "pytest-mock",
+    "pytest-cov",
+    "pytest-sugar",
+]
+lint = [
+    "ruff",
+    "pydantic",
+    "pyrefly",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/grz_db"]
+
+[tool.mypy]
+files = ["src"]
+disallow_untyped_defs = true
+disallow_any_unimported = true
+no_implicit_optional = true
+check_untyped_defs = true
+warn_return_any = true
+warn_unused_ignores = true
+show_error_codes = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 120
+fix = true
+
+[tool.ruff.lint]
+fixable = [
+    "UP",
+    "I",
+    "D",
+]
+ignore = [
+    "E111",
+    "E114",
+    "E116",
+    "PLW",
+    "RUF001",
+    "RUF010",
+    "RUF012",
+    "N818",
+    "B008",
+    "PLR2004",
+    "D200",
+    "D205",
+    "D400",
+    "D401",
+    "D107",
+    "D206",
+    "D300",
+    "UP040",
+]
+select = [
+    "C90",
+    "F",
+    "I",
+    "S",
+    "B",
+    "N",
+    "UP",
+    "PL",
+    "RUF",
+    "SIM",
+    "D",
+    # flake8-2020
+    "YTT",
+    # flake8-bandit
+    "S",
+    # flake8-bugbear
+    "B",
+    # flake8-builtins
+    "A",
+    # flake8-comprehensions
+    "C4",
+    # flake8-debugger
+    "T10",
+    # pycodestyle
+    "E", "W",
+    # pyflakes
+    "F",
+    # pygrep-hooks
+    "PGH",
+    # tryceratops
+    "TRY",
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["S101"]
+
+
+[tool.ruff.lint.pydocstyle]
+convention = "pep257"
+
+[tool.tox]
+requires = ["tox>=4.23"]
+env_list = ["format-check", "lints", "pyrefly", "3.12", "3.13"]
+allowlist_externals = ["pytest", "ruff"]
+isolated_build = true
+
+[tool.tox.env_run_base]
+runner = "uv-venv-lock-runner"
+description = "run unit tests"
+dependency_groups = ["test"]
+commands = [["pytest", { replace = "posargs", default = ["tests"], extend = true }]]
+
+[tool.tox.env."format-check"]
+runner = "uv-venv-lock-runner"
+skip_install = true
+dependency_groups = ["lint"]
+commands = [["ruff", "format", "--check"]]
+
+[tool.tox.env."lints"]
+runner = "uv-venv-lock-runner"
+skip_install = true
+dependency_groups = ["lint"]
+commands = [["ruff", "check"]]
+
+[tool.tox.env."pyrefly"]
+runner = "uv-venv-lock-runner"
+skip_install = false
+dependency_groups = ["lint"]
+commands = [["pyrefly", "check"]]

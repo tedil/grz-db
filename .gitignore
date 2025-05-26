@@ -1,0 +1,9 @@
+.DS_Store
+*.egg-info/
+*.pyc
+*.log
+.vscode
+.venv
+.coverage
+coverage.xml
+.*.swp
