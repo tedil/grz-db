@@ -16,6 +16,7 @@ classifiers = [
 ]
 dependencies = [
     "alembic>=1.16.1",
+    "cryptography>=45.0.3",
     "sqlmodel>=0.0.24",
 ]
 
@@ -172,7 +173,7 @@ commands = [["pyrefly", "check"]]
 # this is typically a path given in POSIX (e.g. forward slashes)
 # format, relative to the token %(here)s which refers to the location of this
 # ini file
-script_location = "%(here)s/alembic"
+script_location = "%(here)s/src/grz_db/migrations"
 
 # template used to generate migration file names; The default value is %%(rev)s_%%(slug)s
 # Uncomment the line below if you want the files to be prepended with date and time
@@ -191,7 +192,7 @@ prepend_sys_path = [
 # Any required deps can installed by adding `alembic[tz]` to the pip requirements
 # string value is passed to ZoneInfo()
 # leave blank for localtime
-# timezone =
+timezone = "UTC"
 
 # max length of characters to apply to the "slug" field
 # truncate_slug_length = 40

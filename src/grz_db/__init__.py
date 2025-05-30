@@ -5,13 +5,15 @@ from collections.abc import Generator
 from contextlib import contextmanager
 from typing import Any
 
+from alembic import command as alembic_command
+from alembic.config import Config as AlembicConfig
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey, Ed25519PublicKey
+from cryptography.hazmat.primitives.asymmetric.types import PrivateKeyTypes, PublicKeyTypes
+from pydantic import BaseModel
 from sqlalchemy import JSON, Column
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import selectinload
 from sqlmodel import Field, Relationship, Session, SQLModel, create_engine, select
-
-from alembic import command as alembic_command
-from alembic.config import Config as AlembicConfig
 
 
 class CaseInsensitiveStrEnum(enum.StrEnum):
@@ -102,6 +104,19 @@ class SubmissionStateLogBase(SQLModel):
     timestamp: datetime.datetime = Field(default_factory=lambda: datetime.datetime.now(datetime.UTC), nullable=False)
 
 
+class SubmissionStateLogPayload(SubmissionStateLogBase):
+    """
+    Used to bundle data for signature calculation.
+    """
+
+    submission_id: str
+    author_name: str
+
+    def to_bytes(self) -> bytes:
+        """A representation of submission state."""
+        return self.model_dump_json(by_alias=True).encode("utf8")
+
+
 class SubmissionStateLog(SubmissionStateLogBase, table=True):
     """Submission state log table model."""
 
@@ -110,6 +125,9 @@ class SubmissionStateLog(SubmissionStateLogBase, table=True):
     id: int | None = Field(default=None, primary_key=True, index=True)
     submission_id: str = Field(foreign_key="submissions.id", index=True)
 
+    author_name: str = Field(index=True)
+    signature: str
+
     submission: Submission | None = Relationship(back_populates="states")
 
 
@@ -117,6 +135,8 @@ class SubmissionStateLogCreate(SubmissionStateLogBase):
     """Submission state log create model."""
 
     submission_id: str
+    author_name: str
+    signature: str
 
 
 class SubmissionCreate(SubmissionBase):
@@ -152,12 +172,18 @@ class DatabaseConfigurationError(Exception):
     pass
 
 
+class Author:
+    def __init__(self, name: str, private_key: PrivateKeyTypes):
+        self.name = name
+        self.private_key = private_key
+
+
 class SubmissionDb:
     """
     API entrypoint for managing submissions.
     """
 
-    def __init__(self, db_url: str, debug: bool = False):
+    def __init__(self, db_url: str, author: Author | None, debug: bool = False):
         """
         Initializes the SubmissionDb.
 
@@ -166,7 +192,7 @@ class SubmissionDb:
             debug: Whether to echo SQL statements.
         """
         self.engine = create_engine(db_url, echo=debug)
-        # SQLModel.metadata.create_all(self.engine)  # use alembic instead
+        self._author = author
 
     @contextmanager
     def get_session(self) -> Generator[Session, Any, None]:
@@ -186,12 +212,16 @@ class SubmissionDb:
 
         alembic_cfg = AlembicConfig(alembic_ini_path)
         alembic_cfg.set_main_option("sqlalchemy.url", str(self.engine.url))
-        alembic_cfg.set_main_option("script_location", "grz_db:../../alembic")
+        alembic_cfg.set_main_option("script_location", "grz_db:migrations")
         return alembic_cfg
 
-    def initialize_schema(self, alembic_ini_path: str, revision: str = "head"):
+    def initialize_schema(self):
+        """Initialize the database."""
+        SQLModel.metadata.create_all(self.engine, checkfirst=True)
+
+    def upgrade_schema(self, alembic_ini_path: str, revision: str = "head"):
         """
-        Initializes or upgrades the database schema using alembic.
+        Upgrades the database schema using alembic.
 
         Args:
             alembic_ini_path: Path to the alembic.ini file.
@@ -201,7 +231,6 @@ class SubmissionDb:
             RuntimeError: For underlying Alembic errors.
         """
         alembic_cfg = self._get_alembic_config(alembic_ini_path)
-        # SQLModel.metadata.create_all(self.engine, checkfirst=True)
         try:
             alembic_command.upgrade(alembic_cfg, revision)
         except Exception as e:
@@ -268,7 +297,13 @@ class SubmissionDb:
             if not submission:
                 raise SubmissionNotFoundError(submission_id)
 
-            state_log_create = SubmissionStateLogCreate(submission_id=submission_id, state=state, data=data)
+            state_log_payload = SubmissionStateLogPayload(
+                submission_id=submission_id, author_name=self._author.name, state=state, data=data
+            )
+            bytes_to_sign = state_log_payload.to_bytes()
+            signature = self._author.private_key.sign(bytes_to_sign)
+
+            state_log_create = SubmissionStateLogCreate(**state_log_payload.model_dump(), signature=signature.hex())
             db_state_log = SubmissionStateLog.model_validate(state_log_create)
             session.add(db_state_log)
 
