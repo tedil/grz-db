@@ -1,19 +1,22 @@
 import datetime
 import enum
+import logging
 import os
 from collections.abc import Generator
 from contextlib import contextmanager
 from typing import Any
 
+import cryptography
 from alembic import command as alembic_command
 from alembic.config import Config as AlembicConfig
-from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey, Ed25519PublicKey
 from cryptography.hazmat.primitives.asymmetric.types import PrivateKeyTypes, PublicKeyTypes
-from pydantic import BaseModel
+from pydantic import ConfigDict
 from sqlalchemy import JSON, Column
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import selectinload
-from sqlmodel import Field, Relationship, Session, SQLModel, create_engine, select
+from sqlmodel import DateTime, Field, Relationship, Session, SQLModel, create_engine, select
+
+log = logging.getLogger(__name__)
 
 
 class CaseInsensitiveStrEnum(enum.StrEnum):
@@ -48,6 +51,19 @@ class CaseInsensitiveStrEnum(enum.StrEnum):
         Override to make hash consistent with eq.
         """
         return hash(self.value.casefold())
+
+
+def serialize_datetime_to_iso_z(dt: datetime.datetime) -> str:
+    """
+    Serializes a datetime object to a canonical ISO 8601 string format with 'Z' for UTC.
+    """
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=datetime.UTC)
+
+    if dt.tzinfo != datetime.UTC and dt.utcoffset() != datetime.timedelta(0):
+        dt = dt.astimezone(datetime.UTC)
+
+    return dt.isoformat()
 
 
 class SubmissionStateEnum(CaseInsensitiveStrEnum):
@@ -101,7 +117,15 @@ class SubmissionStateLogBase(SQLModel):
 
     state: SubmissionStateEnum
     data: dict[str, Any] | None = Field(default=None, sa_column=Column(JSON))
-    timestamp: datetime.datetime = Field(default_factory=lambda: datetime.datetime.now(datetime.UTC), nullable=False)
+    timestamp: datetime.datetime = Field(
+        default_factory=lambda: datetime.datetime.now(datetime.UTC),
+        sa_column=Column(DateTime(timezone=True), nullable=False),
+    )
+
+    model_config = ConfigDict(
+        json_encoders={datetime.datetime: serialize_datetime_to_iso_z},
+        populate_by_name=True,
+    )
 
 
 class SubmissionStateLogPayload(SubmissionStateLogBase):
@@ -116,6 +140,13 @@ class SubmissionStateLogPayload(SubmissionStateLogBase):
         """A representation of submission state."""
         return self.model_dump_json(by_alias=True).encode("utf8")
 
+    def sign(self, private_key: PrivateKeyTypes) -> bytes:
+        """Sign this submission state using the given private key."""
+        bytes_to_sign = self.to_bytes()
+        signature = private_key.sign(bytes_to_sign)
+        private_key.public_key().verify(signature, bytes_to_sign)
+        return signature
+
 
 class SubmissionStateLog(SubmissionStateLogBase, table=True):
     """Submission state log table model."""
@@ -129,6 +160,19 @@ class SubmissionStateLog(SubmissionStateLogBase, table=True):
     signature: str
 
     submission: Submission | None = Relationship(back_populates="states")
+
+    def verify(self, public_key: PublicKeyTypes) -> bool:
+        """Verify submission signature."""
+        signature_bytes = bytes.fromhex(self.signature)
+        payload_to_verify = SubmissionStateLogPayload(**self.model_dump())
+        bytes_to_verify = payload_to_verify.to_bytes()
+        try:
+            public_key.verify(signature_bytes, bytes_to_verify)
+        except cryptography.exceptions.InvalidSignature:
+            return False
+        except:
+            raise
+        return True
 
 
 class SubmissionStateLogCreate(SubmissionStateLogBase):
@@ -173,9 +217,27 @@ class DatabaseConfigurationError(Exception):
 
 
 class Author:
-    def __init__(self, name: str, private_key: PrivateKeyTypes):
+    def __init__(self, name: str, private_key_bytes: bytes):
         self.name = name
-        self.private_key = private_key
+        self.private_key_bytes = private_key_bytes
+
+    def private_key(self) -> PrivateKeyTypes:
+        from functools import partial
+        from getpass import getpass
+
+        from cryptography.hazmat.primitives.serialization import load_ssh_private_key
+
+        passphrase = os.getenv("GRZ_DB_AUTHOR_PASSPHRASE")
+        passphrase_callback = (lambda: passphrase) if passphrase else None
+
+        if not passphrase:
+            passphrase_callback = partial(getpass, prompt=f"Passphrase for GRZ DB author ({self.name}'s) private key: ")
+        log.info(f"Loading private key of {self.name}…")
+        private_key = load_ssh_private_key(
+            self.private_key_bytes,
+            password=passphrase_callback().encode("utf-8"),
+        )
+        return private_key
 
 
 class SubmissionDb:
@@ -300,8 +362,7 @@ class SubmissionDb:
             state_log_payload = SubmissionStateLogPayload(
                 submission_id=submission_id, author_name=self._author.name, state=state, data=data
             )
-            bytes_to_sign = state_log_payload.to_bytes()
-            signature = self._author.private_key.sign(bytes_to_sign)
+            signature = state_log_payload.sign(self._author.private_key())
 
             state_log_create = SubmissionStateLogCreate(**state_log_payload.model_dump(), signature=signature.hex())
             db_state_log = SubmissionStateLog.model_validate(state_log_create)
