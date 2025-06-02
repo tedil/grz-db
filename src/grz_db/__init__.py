@@ -90,6 +90,12 @@ class SubmissionStateEnum(CaseInsensitiveStrEnum):
     ERROR = "Error"
 
 
+    @classmethod
+    def list(cls) -> list[str]:
+        """Returns a list of all known states."""
+        return list(map(lambda c: c.value, cls))  # noqa: C417
+
+
 class SubmissionBase(SQLModel):
     """Submission base model."""
 
